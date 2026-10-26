@@ -8,11 +8,12 @@ const GitHubService = require('./githubService.cjs');
 const StartupService = require('./startupService.cjs');
 const ReminderService = require('./reminderService.cjs');
 const TrayService = require('./trayService.cjs');
+const GitWatcher = require('./gitWatcher.cjs');
 
-// Set App User Model ID on Windows so Action Center / Toast notifications work
+// Set App User Model ID on Windows so Action Center / Toast notifications work reliably
 if (process.platform === 'win32') {
   try {
-    app.setAppUserModelId(app.isPackaged ? 'com.pullmate.app' : process.execPath);
+    app.setAppUserModelId('com.pullmate.app');
   } catch (err) {
     console.warn('[Main] setAppUserModelId failed:', err.message);
   }
@@ -30,13 +31,17 @@ let mainWindow = null;
 let characterWindow = null;
 let trayService = null;
 let reminderService = null;
+let gitWatcher = null;
 let isQuitting = false;
+let isPipMinimized = false;
+let savedNormalCharacterPosition = null;
 
 // Current state for Pip character
 let currentPipState = {
   state: 'idle',
   message: 'Hello! I am Pip, your Git companion.',
-  action: null
+  action: null,
+  isMinimized: false
 };
 
 // Initialize Core Services
@@ -50,7 +55,12 @@ const startupService = new StartupService();
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
 function broadcastPipState(stateObj) {
-  currentPipState = { ...currentPipState, ...stateObj };
+  // If Pip is currently minimized and a new update arrives, automatically open (restore) Pip!
+  if (isPipMinimized && (stateObj.state === 'updates_available' || stateObj.hasUpdate)) {
+    restoreCharacterWindow();
+  }
+
+  currentPipState = { ...currentPipState, ...stateObj, isMinimized: isPipMinimized };
   if (characterWindow && !characterWindow.isDestroyed()) {
     characterWindow.webContents.send('pip:state-changed', currentPipState);
   }
@@ -62,6 +72,18 @@ function broadcastPipState(stateObj) {
 function broadcastRepositoriesUpdated() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('repos:updated');
+  }
+  if (gitWatcher) {
+    gitWatcher.syncWatchers();
+  }
+}
+
+function broadcastNotification(notifObj) {
+  if (isPipMinimized && (notifObj?.type === 'updates_available' || notifObj?.isUpdate)) {
+    restoreCharacterWindow();
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('notification:show', notifObj);
   }
 }
 
@@ -114,6 +136,26 @@ function createMainWindow() {
     }
   });
 
+  // Automatically check for incoming collaborator updates whenever the user focuses or shows the window
+  let lastFocusCheckTime = 0;
+  mainWindow.on('focus', () => {
+    const now = Date.now();
+    const settings = settingsService.getSettings();
+    if (settings.autoCheckOnFocus !== false && reminderService && now - lastFocusCheckTime > 5000) {
+      lastFocusCheckTime = now;
+      reminderService.checkAll({ isFocusCheck: true });
+    }
+  });
+
+  mainWindow.on('show', () => {
+    const now = Date.now();
+    const settings = settingsService.getSettings();
+    if (settings.autoCheckOnFocus !== false && reminderService && now - lastFocusCheckTime > 5000) {
+      lastFocusCheckTime = now;
+      reminderService.checkAll({ isShowCheck: true });
+    }
+  });
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https:') || url.startsWith('http:')) {
       shell.openExternal(url);
@@ -134,22 +176,35 @@ function createMainWindow() {
 function createCharacterWindow() {
   const settings = settingsService.getSettings();
   const primaryDisplay = screen.getPrimaryDisplay();
-  const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
+  const { x: workX, y: workY, width: screenWidth, height: screenHeight } = primaryDisplay.workArea;
 
-  const winWidth = 300;
-  const winHeight = 280;
+  const normalWidth = 300;
+  const normalHeight = 280;
+  const miniSize = 72;
 
-  let x = settings.characterPosition && typeof settings.characterPosition.x === 'number'
-    ? settings.characterPosition.x
-    : screenWidth - winWidth - 30;
+  const isMini = Boolean(settings.characterMinimized);
+  isPipMinimized = isMini;
 
-  let y = settings.characterPosition && typeof settings.characterPosition.y === 'number'
-    ? settings.characterPosition.y
-    : screenHeight - winHeight - 30;
+  const winWidth = isMini ? miniSize : normalWidth;
+  const winHeight = isMini ? miniSize : normalHeight;
 
-  // Clamp within visible display area
-  x = Math.max(10, Math.min(x, screenWidth - winWidth - 10));
-  y = Math.max(10, Math.min(y, screenHeight - winHeight - 10));
+  let x, y;
+  if (isMini) {
+    x = workX + 24;
+    y = workY + screenHeight - miniSize - 24;
+  } else {
+    x = settings.characterPosition && typeof settings.characterPosition.x === 'number'
+      ? settings.characterPosition.x
+      : workX + screenWidth - normalWidth - 30;
+
+    y = settings.characterPosition && typeof settings.characterPosition.y === 'number'
+      ? settings.characterPosition.y
+      : workY + screenHeight - normalHeight - 30;
+
+    // Clamp within visible display area
+    x = Math.max(workX + 10, Math.min(x, workX + screenWidth - normalWidth - 10));
+    y = Math.max(workY + 10, Math.min(y, workY + screenHeight - normalHeight - 10));
+  }
 
   characterWindow = new BrowserWindow({
     width: winWidth,
@@ -186,7 +241,7 @@ function createCharacterWindow() {
   });
 
   characterWindow.on('moved', () => {
-    if (!characterWindow || characterWindow.isDestroyed()) return;
+    if (!characterWindow || characterWindow.isDestroyed() || isPipMinimized) return;
     const [curX, curY] = characterWindow.getPosition();
     settingsService.updateSettings({
       characterPosition: { x: curX, y: curY }
@@ -194,6 +249,75 @@ function createCharacterWindow() {
   });
 
   characterWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+}
+
+function minimizeCharacterWindow() {
+  if (!characterWindow || characterWindow.isDestroyed() || isPipMinimized) return;
+
+  const [curX, curY] = characterWindow.getPosition();
+  savedNormalCharacterPosition = { x: curX, y: curY };
+
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { x: workX, y: workY, height: workHeight } = primaryDisplay.workArea;
+
+  const miniSize = 72;
+  const miniX = workX + 24;
+  const miniY = workY + workHeight - miniSize - 24;
+
+  isPipMinimized = true;
+  settingsService.updateSettings({ characterMinimized: true });
+
+  characterWindow.setBounds({
+    x: miniX,
+    y: miniY,
+    width: miniSize,
+    height: miniSize
+  });
+
+  characterWindow.setAlwaysOnTop(true);
+  broadcastPipState({ isMinimized: true });
+  broadcastSettingsChanged(settingsService.getSettings());
+  if (trayService) trayService.updateContextMenu();
+}
+
+function restoreCharacterWindow() {
+  if (!characterWindow || characterWindow.isDestroyed() || !isPipMinimized) return;
+
+  const settings = settingsService.getSettings();
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { x: workX, y: workY, width: workWidth, height: workHeight } = primaryDisplay.workArea;
+
+  const normalWidth = 300;
+  const normalHeight = 280;
+
+  let targetX = savedNormalCharacterPosition?.x ?? settings.characterPosition?.x ?? (workX + workWidth - normalWidth - 30);
+  let targetY = savedNormalCharacterPosition?.y ?? settings.characterPosition?.y ?? (workY + workHeight - normalHeight - 30);
+
+  targetX = Math.max(workX + 10, Math.min(targetX, workX + workWidth - normalWidth - 10));
+  targetY = Math.max(workY + 10, Math.min(targetY, workY + workHeight - normalHeight - 10));
+
+  isPipMinimized = false;
+  settingsService.updateSettings({ characterMinimized: false });
+
+  characterWindow.setBounds({
+    x: targetX,
+    y: targetY,
+    width: normalWidth,
+    height: normalHeight
+  });
+
+  characterWindow.setAlwaysOnTop(Boolean(settings.characterAlwaysOnTop));
+  broadcastPipState({ isMinimized: false });
+  broadcastSettingsChanged(settingsService.getSettings());
+  if (trayService) trayService.updateContextMenu();
+}
+
+function toggleMinimizeCharacterWindow() {
+  if (isPipMinimized) {
+    restoreCharacterWindow();
+  } else {
+    minimizeCharacterWindow();
+  }
 }
 
 function showMainWindow() {
@@ -228,21 +352,33 @@ function toggleCharacterWindow() {
 
 // App lifecycle
 app.whenReady().then(async () => {
-  // Initialize Reminder Service
+  // Initialize Reminder Service with Real-Time Notification delivery
   reminderService = new ReminderService({
     gitService,
     repositoryService,
     settingsService,
     onPipStateChange: broadcastPipState,
     onRepositoriesChange: broadcastRepositoriesUpdated,
-    onShowMainWindow: showMainWindow
+    onSettingsChange: broadcastSettingsChanged,
+    onShowMainWindow: showMainWindow,
+    onNotification: broadcastNotification
   });
+
+  // Initialize Real-time Local Git Filesystem Watcher
+  gitWatcher = new GitWatcher({
+    gitService,
+    repositoryService,
+    onRepositoriesChange: broadcastRepositoriesUpdated,
+    onPipStateChange: broadcastPipState
+  });
+  gitWatcher.syncWatchers();
 
   // Initialize System Tray
   trayService = new TrayService({
     onOpenDashboard: showMainWindow,
     onCheckAll: () => reminderService.checkAll({ manual: true }),
     onToggleCharacter: toggleCharacterWindow,
+    onToggleMinimizeCharacter: toggleMinimizeCharacterWindow,
     onSnooze: (hours) => {
       if (hours === 0) reminderService.clearSnooze();
       else reminderService.snooze(hours);
@@ -257,7 +393,8 @@ app.whenReady().then(async () => {
       isQuitting = true;
       app.quit();
     },
-    getCharacterVisibility: () => settingsService.getSettings().characterVisible
+    getCharacterVisibility: () => settingsService.getSettings().characterVisible,
+    getCharacterMinimized: () => isPipMinimized
   });
   trayService.init();
 
@@ -287,6 +424,9 @@ app.on('activate', () => {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  if (gitWatcher) {
+    gitWatcher.close();
+  }
 });
 
 // ==========================================
@@ -478,17 +618,35 @@ ipcMain.handle('repos:safe-pull', async (_event, repoId) => {
     action: null
   });
 
-  const pullResult = await gitService.safePull(repo.localPath);
-  repositoryService.updateRepositoryStatus(repo.id, pullResult.status);
-  broadcastRepositoriesUpdated();
+  try {
+    const pullResult = await gitService.safePull(repo.localPath);
+    repositoryService.updateRepositoryStatus(repo.id, pullResult.status);
+    broadcastRepositoriesUpdated();
 
-  broadcastPipState({
-    state: 'celebrating',
-    message: `Pulled latest changes for ${repo.name}! You are synchronized.`,
-    action: null
-  });
+    broadcastPipState({
+      state: 'celebrating',
+      message: `Pulled latest changes for ${repo.name}! You are synchronized.`,
+      action: null
+    });
 
-  return pullResult;
+    // Notify user in real time about successful fast-forward pull
+    reminderService.notifyPullSuccess(repo.name, pullResult.message);
+
+    return pullResult;
+  } catch (err) {
+    console.error(`[IPC] Safe pull failed for ${repo.name}:`, err.message);
+
+    broadcastPipState({
+      state: 'error',
+      message: `Pull failed for ${repo.name}: ${err.message}`,
+      action: null
+    });
+
+    // Notify user about pull failure in real time
+    reminderService.notifyPullError(repo.name, err.message);
+
+    throw err;
+  }
 });
 
 ipcMain.handle('repos:open-folder', async (_event, localPath) => {
@@ -525,6 +683,15 @@ ipcMain.handle('settings:update', (_event, partial) => {
     if (trayService) trayService.updateContextMenu();
   }
 
+  // If character minimized state changed, apply
+  if (partial.characterMinimized !== undefined) {
+    if (partial.characterMinimized) {
+      minimizeCharacterWindow();
+    } else {
+      restoreCharacterWindow();
+    }
+  }
+
   // If always on top changed
   if (partial.characterAlwaysOnTop !== undefined && characterWindow && !characterWindow.isDestroyed()) {
     characterWindow.setAlwaysOnTop(Boolean(partial.characterAlwaysOnTop));
@@ -547,7 +714,26 @@ ipcMain.handle('settings:reset', (_event, fullReset) => {
 
 // --- Pip Character Companion Handlers ---
 ipcMain.handle('pip:get-state', () => {
-  return currentPipState;
+  return { ...currentPipState, isMinimized: isPipMinimized };
+});
+
+ipcMain.handle('pip:minimize', () => {
+  minimizeCharacterWindow();
+  return true;
+});
+
+ipcMain.handle('pip:restore', () => {
+  restoreCharacterWindow();
+  return true;
+});
+
+ipcMain.handle('pip:toggle-minimize', () => {
+  toggleMinimizeCharacterWindow();
+  return isPipMinimized;
+});
+
+ipcMain.handle('pip:is-minimized', () => {
+  return isPipMinimized;
 });
 
 ipcMain.handle('pip:save-position', (_event, { x, y }) => {
@@ -595,4 +781,12 @@ ipcMain.handle('system:clear-snooze', () => {
 
 ipcMain.handle('system:check-git', async () => {
   return gitService.checkGitInstalled();
+});
+
+ipcMain.handle('system:test-notification', () => {
+  if (reminderService) {
+    reminderService.sendTestNotification();
+    return true;
+  }
+  return false;
 });

@@ -1,18 +1,45 @@
-const { Notification } = require('electron');
+const { Notification, nativeImage } = require('electron');
 
 class ReminderService {
-  constructor({ gitService, repositoryService, settingsService, onPipStateChange, onRepositoriesChange, onShowMainWindow }) {
+  constructor({ gitService, repositoryService, settingsService, onPipStateChange, onRepositoriesChange, onSettingsChange, onShowMainWindow, onNotification }) {
     this.gitService = gitService;
     this.repositoryService = repositoryService;
     this.settingsService = settingsService;
     this.onPipStateChange = onPipStateChange || (() => {});
     this.onRepositoriesChange = onRepositoriesChange || (() => {});
+    this.onSettingsChange = onSettingsChange || (() => {});
     this.onShowMainWindow = onShowMainWindow || (() => {});
+    this.onNotification = onNotification || (() => {});
 
     this.timer = null;
     this.isChecking = false;
     // Map of repoId -> { count: number, timestamp: number }
     this.notificationHistory = new Map();
+
+    // Cache native icon for Windows toasts
+    this.appIcon = this._createAppIcon();
+  }
+
+  /**
+   * Generates a crisp icon image for native Windows notifications
+   */
+  _createAppIcon() {
+    try {
+      if (nativeImage) {
+        const svg = `
+          <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="11" fill="#2E7D32"/>
+            <circle cx="8" cy="10" r="2.2" fill="#FFFFFF"/>
+            <circle cx="16" cy="10" r="2.2" fill="#FFFFFF"/>
+            <path d="M7 15 C9 18, 15 18, 17 15" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round"/>
+          </svg>
+        `.trim();
+        return nativeImage.createFromDataURL(`data:image/svg+xml;utf8,${encodeURIComponent(svg)}`);
+      }
+    } catch {
+      // Fallback if nativeImage fails
+    }
+    return null;
   }
 
   /**
@@ -21,8 +48,11 @@ class ReminderService {
   start() {
     this.stop();
     const settings = this.settingsService.getSettings();
-    const intervalMinutes = Math.max(1, settings.checkIntervalMinutes !== undefined ? settings.checkIntervalMinutes : 1);
-    const intervalMs = intervalMinutes * 60 * 1000;
+    const intervalMinutes = typeof settings.checkIntervalMinutes === 'number' && settings.checkIntervalMinutes > 0
+      ? settings.checkIntervalMinutes
+      : 0.5;
+    // Minimum 10 seconds, default based on settings (e.g. 0.5 = 30 seconds, 0.25 = 15 seconds)
+    const intervalMs = Math.max(10000, Math.round(intervalMinutes * 60 * 1000));
 
     console.log(`[ReminderService] Scheduler started. Checking every ${intervalMinutes} minute(s) (${intervalMs}ms).`);
 
@@ -104,80 +134,82 @@ class ReminderService {
     }
 
     this.isChecking = true;
-    const settings = this.settingsService.getSettings();
-    const repos = this.repositoryService.getRepositories();
+    try {
+      const settings = this.settingsService.getSettings();
+      const repos = this.repositoryService.getRepositories();
 
-    if (repos.length === 0) {
-      this.isChecking = false;
-      return { checkedCount: 0 };
-    }
-
-    // Set Pip to checking state
-    this.onPipStateChange({
-      state: 'checking',
-      message: 'Checking for Git updates...',
-      action: null
-    });
-
-    let totalBehind = 0;
-    let behindRepos = [];
-    let uncommittedRepos = [];
-    let errorRepos = [];
-
-    // Limit concurrency to 3 simultaneous checks
-    const concurrency = 3;
-    const queue = [...repos];
-
-    const worker = async () => {
-      while (queue.length > 0) {
-        const repo = queue.shift();
-        try {
-          const status = await this.gitService.getStatus(repo.localPath, true);
-          this.repositoryService.updateRepositoryStatus(repo.id, status);
-
-          if (status.status === 'behind') {
-            totalBehind += status.behindCount;
-            behindRepos.push({ repo, status });
-          } else if (status.status === 'uncommitted_changes' || !status.isClean) {
-            uncommittedRepos.push({ repo, status });
-          } else if (status.status === 'fetch_failed' || status.status === 'repo_unavailable') {
-            errorRepos.push({ repo, status });
-          }
-        } catch (err) {
-          console.error(`[ReminderService] Error checking ${repo.name}:`, err.message);
-          this.repositoryService.updateRepositoryStatus(repo.id, {
-            status: 'fetch_failed',
-            lastError: err.message
-          });
-          errorRepos.push({ repo, status: { lastError: err.message } });
-        }
+      if (repos.length === 0) {
+        return { checkedCount: 0 };
       }
-    };
 
-    const workers = Array.from({ length: Math.min(concurrency, repos.length) }, () => worker());
-    await Promise.all(workers);
+      // Set Pip to checking state
+      this.onPipStateChange({
+        state: 'checking',
+        message: 'Checking for Git updates...',
+        action: null
+      });
 
-    // Save global last checked timestamp
-    this.settingsService.updateSettings({ lastGlobalCheckAt: new Date().toISOString() });
-    this.onRepositoriesChange();
+      let totalBehind = 0;
+      let behindRepos = [];
+      let uncommittedRepos = [];
+      let errorRepos = [];
 
-    this.isChecking = false;
+      // Limit concurrency to 3 simultaneous checks
+      const concurrency = 3;
+      const queue = [...repos];
 
-    // Evaluate notifications & Pip character state
-    this._evaluateStateAndNotifications({
-      settings,
-      behindRepos,
-      uncommittedRepos,
-      errorRepos,
-      totalRepos: repos.length,
-      options
-    });
+      const worker = async () => {
+        while (queue.length > 0) {
+          const repo = queue.shift();
+          try {
+            const status = await this.gitService.getStatus(repo.localPath, true);
+            this.repositoryService.updateRepositoryStatus(repo.id, status);
 
-    return {
-      checkedCount: repos.length,
-      behindCount: behindRepos.length,
-      errorCount: errorRepos.length
-    };
+            if (status.status === 'behind') {
+              totalBehind += status.behindCount;
+              behindRepos.push({ repo, status });
+            } else if (status.status === 'uncommitted_changes' || !status.isClean) {
+              uncommittedRepos.push({ repo, status });
+            } else if (status.status === 'fetch_failed' || status.status === 'repo_unavailable') {
+              errorRepos.push({ repo, status });
+            }
+          } catch (err) {
+            console.error(`[ReminderService] Error checking ${repo.name}:`, err.message);
+            this.repositoryService.updateRepositoryStatus(repo.id, {
+              status: 'fetch_failed',
+              lastError: err.message
+            });
+            errorRepos.push({ repo, status: { lastError: err.message } });
+          }
+        }
+      };
+
+      const workers = Array.from({ length: Math.min(concurrency, repos.length) }, () => worker());
+      await Promise.all(workers);
+
+      // Save global last checked timestamp and notify both repos and settings to update UI in real time
+      const updatedSettings = this.settingsService.updateSettings({ lastGlobalCheckAt: new Date().toISOString() });
+      this.onRepositoriesChange();
+      this.onSettingsChange(updatedSettings);
+
+      // Evaluate notifications & Pip character state
+      this._evaluateStateAndNotifications({
+        settings: updatedSettings,
+        behindRepos,
+        uncommittedRepos,
+        errorRepos,
+        totalRepos: repos.length,
+        options
+      });
+
+      return {
+        checkedCount: repos.length,
+        behindCount: behindRepos.length,
+        errorCount: errorRepos.length
+      };
+    } finally {
+      this.isChecking = false;
+    }
   }
 
   /**
@@ -202,17 +234,37 @@ class ReminderService {
     const updated = this.repositoryService.updateRepositoryStatus(repo.id, status);
     this.onRepositoriesChange();
 
+    const settings = this.settingsService.getSettings();
+
     if (status.status === 'behind') {
       this.onPipStateChange({
         state: 'updates_available',
         message: `${repo.name} is ${status.behindCount} commit${status.behindCount > 1 ? 's' : ''} behind.`,
         action: { label: 'Pull Changes', type: 'pull', repoId: repo.id }
       });
+
+      // Send real-time notification immediately on manual check
+      if (settings.notificationsEnabled && !this.isQuietHours(settings) && !this.isSnoozed(settings)) {
+        this._sendNativeNotification(
+          `PullMate: ${repo.name} Needs Sync (${status.behindCount} new commit${status.behindCount > 1 ? 's' : ''})`,
+          `Branch is ${status.behindCount} commit${status.behindCount > 1 ? 's' : ''} behind remote. Fast-forward pull ready.`,
+          { type: 'warning', repoId: repo.id }
+        );
+      }
     } else if (status.status === 'up_to_date') {
       this.onPipStateChange({
         state: 'up_to_date',
         message: `${repo.name} is synchronized!`,
         action: null
+      });
+
+      // In-app real-time feedback
+      this.onNotification({
+        id: Date.now(),
+        type: 'success',
+        title: `${repo.name} is Up to Date`,
+        message: 'No incoming commits. Working branch is fully synchronized.',
+        timestamp: new Date().toISOString()
       });
     } else if (!status.isClean) {
       this.onPipStateChange({
@@ -223,6 +275,40 @@ class ReminderService {
     }
 
     return updated;
+  }
+
+  /**
+   * Notifies user that a Fast-Forward pull was completed successfully
+   * @param {string} repoName 
+   * @param {string} details 
+   */
+  notifyPullSuccess(repoName, details = '') {
+    const title = `Pull Complete: ${repoName} Synchronized`;
+    const body = `Latest changes fast-forward pulled successfully into local branch.`;
+
+    this._sendNativeNotification(title, body, { type: 'success' });
+  }
+
+  /**
+   * Notifies user that a Fast-Forward pull failed
+   * @param {string} repoName 
+   * @param {string} errorMessage 
+   */
+  notifyPullError(repoName, errorMessage) {
+    const title = `Pull Failed: ${repoName}`;
+    const body = errorMessage || 'Could not fast-forward branch from remote.';
+
+    this._sendNativeNotification(title, body, { type: 'error' });
+  }
+
+  /**
+   * Dispatches a test notification for user to confirm real-time alerts work
+   */
+  sendTestNotification() {
+    const title = 'PullMate: Real-Time Alerts Active';
+    const body = 'Desktop notifications and in-app sync alerts are configured and working!';
+
+    this._sendNativeNotification(title, body, { type: 'success' });
   }
 
   /**
@@ -272,6 +358,17 @@ class ReminderService {
         message: 'All your repositories are up to date! Great job!',
         action: null
       });
+
+      // If user performed manual "Check All", let them know everything is up to date in-app
+      if (options?.manual) {
+        this.onNotification({
+          id: Date.now(),
+          type: 'success',
+          title: 'All Repositories Synchronized',
+          message: 'All tracked repositories are up to date with remote.',
+          timestamp: new Date().toISOString()
+        });
+      }
     }
 
     // Windows Native Notification dispatch
@@ -279,18 +376,22 @@ class ReminderService {
       return;
     }
 
+    const isManual = Boolean(options?.manual);
+
     for (const item of behindRepos) {
       const { repo, status } = item;
       const history = this.notificationHistory.get(repo.id);
       const now = Date.now();
 
       // Trigger notification if:
-      // 1. Repo is newly behind
-      // 2. OR incoming commit count has changed (someone pushed another commit)
-      // 3. OR 10 minutes have elapsed since the last alert
-      const shouldNotify = !history ||
+      // 1. Manual check requested
+      // 2. OR Repo is newly behind
+      // 3. OR incoming commit count has changed
+      // 4. OR 2 minutes have elapsed since the last alert (for real-time responsiveness)
+      const shouldNotify = isManual ||
+        !history ||
         (status.behindCount !== history.count) ||
-        ((now - history.timestamp) > 10 * 60 * 1000);
+        ((now - history.timestamp) > 2 * 60 * 1000);
 
       if (!shouldNotify) {
         continue;
@@ -303,12 +404,12 @@ class ReminderService {
 
       this._sendNativeNotification(
         `PullMate: ${repo.name} Needs Sync (${status.behindCount} new commit${status.behindCount > 1 ? 's' : ''})`,
-        `Branch is ${status.behindCount} commit${status.behindCount > 1 ? 's' : ''} behind remote (${status.trackingBranch || 'origin'}). Fast-forward pull available.`
+        `Branch is ${status.behindCount} commit${status.behindCount > 1 ? 's' : ''} behind remote (${status.trackingBranch || 'origin'}). Fast-forward pull available.`,
+        { type: 'warning', repoId: repo.id }
       );
     }
 
     // Reset notification history for repositories that are now up to date
-    // so any new remote commits trigger an immediate notification
     const currentRepos = this.repositoryService.getRepositories();
     for (const repo of currentRepos) {
       if (!behindRepos.some(b => b.repo.id === repo.id)) {
@@ -317,16 +418,37 @@ class ReminderService {
     }
   }
 
-  _sendNativeNotification(title, body) {
+  _sendNativeNotification(title, body, options = {}) {
+    // 1. Dispatch real-time in-app notification to renderer
     try {
-      if (Notification.isSupported()) {
-        const notification = new Notification({
+      this.onNotification({
+        id: Date.now(),
+        type: options.type || 'info',
+        title,
+        message: body,
+        repoId: options.repoId || null,
+        timestamp: new Date().toISOString()
+      });
+    } catch (err) {
+      console.warn('[ReminderService] In-app notification delivery failed:', err.message);
+    }
+
+    // 2. Dispatch Windows Native Toast notification
+    try {
+      if (Notification && Notification.isSupported && Notification.isSupported()) {
+        const notifOptions = {
           title,
           body,
           silent: false,
           urgency: 'critical',
           timeoutType: 'default'
-        });
+        };
+
+        if (this.appIcon) {
+          notifOptions.icon = this.appIcon;
+        }
+
+        const notification = new Notification(notifOptions);
 
         notification.on('click', () => {
           this.onShowMainWindow();

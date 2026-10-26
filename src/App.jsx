@@ -4,6 +4,7 @@ import { useRepositories } from './hooks/useRepositories';
 import FloatingCharacter from './components/FloatingCharacter';
 import Sidebar from './components/Sidebar';
 import Topbar from './components/Topbar';
+import ToastNotification from './components/ToastNotification';
 import Onboarding from './pages/Onboarding';
 import Dashboard from './pages/Dashboard';
 import Repositories from './pages/Repositories';
@@ -32,6 +33,76 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('overview');
   const [searchQuery, setSearchQuery] = useState('');
   const [pipGreeting, setPipGreeting] = useState('');
+  const [toasts, setToasts] = useState([]);
+
+  // Subscribe to real-time sync & action notifications
+  useEffect(() => {
+    if (window.pullmateApi?.notifications?.onNotification) {
+      const unsubscribe = window.pullmateApi.notifications.onNotification((notif) => {
+        if (!notif) return;
+        setToasts((prev) => [
+          ...prev.slice(-3), // keep maximum 4 active toasts on screen
+          { ...notif, id: notif.id || Date.now() + Math.random() }
+        ]);
+      });
+      return () => unsubscribe();
+    }
+  }, []);
+
+  const handleDismissToast = (id) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const handleToastAction = async (repoId) => {
+    if (!repoId) return;
+    try {
+      await pullRepository(repoId);
+    } catch (err) {
+      console.error('Failed to pull from toast action:', err);
+    }
+  };
+
+  // Real-time active polling & window focus auto-check
+  // Detects incoming commits from friends/collaborators in real time without manual refresh
+  useEffect(() => {
+    if (isCharacterMode) return;
+
+    let lastAutoCheckTime = Date.now();
+
+    const doAutoCheck = () => {
+      const now = Date.now();
+      if (now - lastAutoCheckTime > 7000 && !isCheckingAll) {
+        lastAutoCheckTime = now;
+        checkAll();
+      }
+    };
+
+    // Auto-poll GitHub remotes every 20 seconds while window is open
+    const pollInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        doAutoCheck();
+      }
+    }, 20000);
+
+    // Auto-check immediately when user switches focus to the PullMate window
+    const handleFocus = () => {
+      doAutoCheck();
+    };
+
+    window.addEventListener('focus', handleFocus);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        doAutoCheck();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      clearInterval(pollInterval);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [checkAll, isCheckingAll, isCharacterMode]);
 
   // If this window is the floating character window, render the companion directly
   if (isCharacterMode) {
@@ -167,6 +238,12 @@ export default function App() {
           )}
         </main>
       </div>
+
+      <ToastNotification
+        notifications={toasts}
+        onDismiss={handleDismissToast}
+        onAction={handleToastAction}
+      />
     </div>
   );
 }

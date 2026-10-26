@@ -87,18 +87,21 @@ describe('SettingsService Local Persistence', () => {
     const settings = settingsService.getSettings();
     expect(settings.onboardingCompleted).toBe(false);
     expect(settings.characterVisible).toBe(true);
-    expect(settings.checkIntervalMinutes).toBe(1);
+    expect(settings.characterMinimized).toBe(false);
+    expect(settings.checkIntervalMinutes).toBe(0.5);
   });
 
   it('persists and updates partial settings', () => {
     settingsService.updateSettings({
       onboardingCompleted: true,
+      characterMinimized: true,
       checkIntervalMinutes: 60,
       characterPosition: { x: 450, y: 550 }
     });
 
     const refreshed = new SettingsService(tempDir).getSettings();
     expect(refreshed.onboardingCompleted).toBe(true);
+    expect(refreshed.characterMinimized).toBe(true);
     expect(refreshed.checkIntervalMinutes).toBe(60);
     expect(refreshed.characterPosition.x).toBe(450);
     expect(refreshed.characterPosition.y).toBe(550);
@@ -261,5 +264,29 @@ describe('ReminderService Quiet Hours & Snooze Logic', () => {
       quietHoursStart: '22:00',
       quietHoursEnd: '08:00'
     })).toBe(false);
+  });
+
+  it('dispatches real-time in-app notifications on pull success, failure, and test', () => {
+    const notifications = [];
+    const service = new ReminderService({
+      gitService: {},
+      repositoryService: { getRepositories: () => [] },
+      settingsService: { getSettings: () => ({ notificationsEnabled: true }) },
+      onNotification: (notif) => notifications.push(notif)
+    });
+
+    service.notifyPullSuccess('my-cool-repo', 'Fast-forward updated');
+    expect(notifications.length).toBe(1);
+    expect(notifications[0].type).toBe('success');
+    expect(notifications[0].title).toContain('my-cool-repo');
+
+    service.notifyPullError('my-cool-repo', 'Uncommitted changes detected');
+    expect(notifications.length).toBe(2);
+    expect(notifications[1].type).toBe('error');
+    expect(notifications[1].message).toContain('Uncommitted changes detected');
+
+    service.sendTestNotification();
+    expect(notifications.length).toBe(3);
+    expect(notifications[2].type).toBe('success');
   });
 });

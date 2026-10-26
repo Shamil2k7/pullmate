@@ -65,6 +65,10 @@ contextBridge.exposeInMainWorld('pullmateApi', {
     savePosition: (x, y) => ipcRenderer.invoke('pip:save-position', { x, y }),
     hide: () => ipcRenderer.invoke('pip:hide'),
     show: () => ipcRenderer.invoke('pip:show'),
+    minimize: () => ipcRenderer.invoke('pip:minimize'),
+    restore: () => ipcRenderer.invoke('pip:restore'),
+    toggleMinimize: () => ipcRenderer.invoke('pip:toggle-minimize'),
+    isMinimized: () => ipcRenderer.invoke('pip:is-minimized'),
     openMainWindow: () => ipcRenderer.invoke('pip:open-main-window'),
     onStateChanged: (callback) => {
       const handler = (_event, data) => callback(data);
@@ -73,10 +77,21 @@ contextBridge.exposeInMainWorld('pullmateApi', {
     }
   },
 
+  // Notifications & Real-Time Alerts
+  notifications: {
+    onNotification: (callback) => {
+      const handler = (_event, data) => callback(data);
+      ipcRenderer.on('notification:show', handler);
+      return () => ipcRenderer.removeListener('notification:show', handler);
+    },
+    testNotification: () => ipcRenderer.invoke('system:test-notification')
+  },
+
   // Reminders & System
   system: {
     snooze: (hours) => ipcRenderer.invoke('system:snooze', hours),
     clearSnooze: () => ipcRenderer.invoke('system:clear-snooze'),
-    checkGitInstalled: () => ipcRenderer.invoke('system:check-git')
+    checkGitInstalled: () => ipcRenderer.invoke('system:check-git'),
+    testNotification: () => ipcRenderer.invoke('system:test-notification')
   }
 });

@@ -1,7 +1,7 @@
 import React from 'react';
-import { X, ExternalLink, Download, EyeOff, Folder } from 'lucide-react';
+import { X, ExternalLink, Download, EyeOff, Folder, Minus } from 'lucide-react';
 
-export default function CharacterBubble({ message, action, onClose, onHideCharacter, onOpenMainWindow }) {
+export default function CharacterBubble({ message, action, onClose, onHideCharacter, onMinimize, onOpenMainWindow }) {
   const handleActionClick = async () => {
     if (!action) return;
 
@@ -27,6 +27,15 @@ export default function CharacterBubble({ message, action, onClose, onHideCharac
       <div className="character-bubble-header">
         <span className="character-bubble-title">Pip</span>
         <div className="character-bubble-controls">
+          {onMinimize && (
+            <button
+              className="bubble-icon-btn"
+              title="Minimize Pip to Bottom Left"
+              onClick={onMinimize}
+            >
+              <Minus size={12} />
+            </button>
+          )}
           <button
             className="bubble-icon-btn"
             title="Open PullMate Dashboard"

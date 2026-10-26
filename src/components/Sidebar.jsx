@@ -7,12 +7,18 @@ import {
   Settings,
   User,
   Eye,
-  EyeOff
+  EyeOff,
+  Minus,
+  Maximize2
 } from 'lucide-react';
 
 export default function Sidebar({ activeTab, onTabChange, settings, onUpdateSettings, trackedCount = 0 }) {
   const toggleCharacter = () => {
     onUpdateSettings({ characterVisible: !settings.characterVisible });
+  };
+
+  const toggleMinimize = () => {
+    onUpdateSettings({ characterMinimized: !settings.characterMinimized });
   };
 
   return (
@@ -86,28 +92,53 @@ export default function Sidebar({ activeTab, onTabChange, settings, onUpdateSett
       {/* Pip Companion Mini-Card in Sidebar */}
       <div className="sidebar-pip-card">
         <div className="pip-card-header">
-          <div className="pip-status-dot active" />
+          <div className={`pip-status-dot ${settings.characterVisible ? 'active' : ''}`} />
           <span className="pip-card-title">Pip Companion</span>
         </div>
         <p className="pip-card-desc">
-          {settings.characterVisible ? 'Pip is floating on your desktop.' : 'Pip is currently hidden.'}
+          {!settings.characterVisible
+            ? 'Pip is currently hidden.'
+            : settings.characterMinimized
+            ? 'Pip is minimized in the bottom-left corner.'
+            : 'Pip is floating on your desktop.'}
         </p>
-        <button
-          className={`btn-toggle-pip ${settings.characterVisible ? 'visible' : 'hidden'}`}
-          onClick={toggleCharacter}
-        >
-          {settings.characterVisible ? (
-            <>
-              <EyeOff size={14} />
-              <span>Hide Pip</span>
-            </>
-          ) : (
-            <>
-              <Eye size={14} />
-              <span>Show Pip</span>
-            </>
+        <div className="pip-card-actions">
+          <button
+            className={`btn-toggle-pip ${settings.characterVisible ? 'visible' : 'hidden'}`}
+            onClick={toggleCharacter}
+          >
+            {settings.characterVisible ? (
+              <>
+                <EyeOff size={14} />
+                <span>Hide</span>
+              </>
+            ) : (
+              <>
+                <Eye size={14} />
+                <span>Show Pip</span>
+              </>
+            )}
+          </button>
+          {settings.characterVisible && (
+            <button
+              className="btn-minimize-pip"
+              onClick={toggleMinimize}
+              title={settings.characterMinimized ? 'Restore Pip to normal size' : 'Minimize Pip to bottom-left'}
+            >
+              {settings.characterMinimized ? (
+                <>
+                  <Maximize2 size={13} />
+                  <span>Restore</span>
+                </>
+              ) : (
+                <>
+                  <Minus size={13} />
+                  <span>Minimize</span>
+                </>
+              )}
+            </button>
           )}
-        </button>
+        </div>
       </div>
     </aside>
   );

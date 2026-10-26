@@ -7,9 +7,12 @@ const DEFAULT_SETTINGS = {
   startupEnabled: false,
   characterVisible: true,
   characterAlwaysOnTop: true,
+  characterMinimized: false,
   characterPosition: { x: null, y: null },
   notificationsEnabled: true,
-  checkIntervalMinutes: 1,
+  checkIntervalMinutes: 0.5, // 30 seconds default for real-time synchronization
+  autoCheckOnFocus: true,    // automatically checks for remote updates when window gains focus
+  realtimeInitialized: true,
   checkOnStartup: true,
   quietHoursEnabled: false,
   quietHoursStart: '22:00',
@@ -54,7 +57,18 @@ class SettingsService {
     try {
       const data = fs.readFileSync(this.settingsFilePath, 'utf-8');
       const parsed = JSON.parse(data);
+
+      // Upgrade legacy 30-minute intervals to real-time sync mode if not already initialized
+      if (parsed.checkIntervalMinutes === 30 && !parsed.realtimeInitialized) {
+        parsed.checkIntervalMinutes = 0.5;
+        parsed.realtimeInitialized = true;
+      }
+      if (parsed.autoCheckOnFocus === undefined) {
+        parsed.autoCheckOnFocus = true;
+      }
+
       this.cachedSettings = { ...DEFAULT_SETTINGS, ...parsed };
+      this._saveToDisk(this.cachedSettings);
       return { ...this.cachedSettings };
     } catch (err) {
       console.error('[SettingsService] Failed to read settings, recovering with defaults:', err.message);

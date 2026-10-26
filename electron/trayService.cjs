@@ -1,14 +1,16 @@
 const { Tray, Menu, nativeImage, app } = require('electron');
 
 class TrayService {
-  constructor({ onOpenDashboard, onCheckAll, onToggleCharacter, onSnooze, onOpenSettings, onQuit, getCharacterVisibility }) {
+  constructor({ onOpenDashboard, onCheckAll, onToggleCharacter, onToggleMinimizeCharacter, onSnooze, onOpenSettings, onQuit, getCharacterVisibility, getCharacterMinimized }) {
     this.onOpenDashboard = onOpenDashboard;
     this.onCheckAll = onCheckAll;
     this.onToggleCharacter = onToggleCharacter;
+    this.onToggleMinimizeCharacter = onToggleMinimizeCharacter;
     this.onSnooze = onSnooze;
     this.onOpenSettings = onOpenSettings;
     this.onQuit = onQuit;
     this.getCharacterVisibility = getCharacterVisibility || (() => true);
+    this.getCharacterMinimized = getCharacterMinimized || (() => false);
 
     this.tray = null;
   }
@@ -48,6 +50,7 @@ class TrayService {
     if (!this.tray) return;
 
     const isCharVisible = this.getCharacterVisibility();
+    const isCharMinimized = this.getCharacterMinimized();
 
     const contextMenu = Menu.buildFromTemplate([
       {
@@ -63,6 +66,10 @@ class TrayService {
         label: isCharVisible ? 'Hide Pip' : 'Show Pip',
         click: () => this.onToggleCharacter()
       },
+      ...(isCharVisible ? [{
+        label: isCharMinimized ? 'Restore Pip' : 'Minimize Pip',
+        click: () => this.onToggleMinimizeCharacter && this.onToggleMinimizeCharacter()
+      }] : []),
       {
         label: 'Snooze Reminders',
         submenu: [

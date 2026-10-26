@@ -1,20 +1,33 @@
 import React, { useState, useEffect } from 'react';
 import CharacterBubble from './CharacterBubble';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, Minus } from 'lucide-react';
 
 export default function FloatingCharacter() {
   const [pipState, setPipState] = useState({
     state: 'idle', // idle, greeting, checking, updates_available, up_to_date, unsaved_changes, error, sleeping, celebrating
     message: 'Hello! I am Pip, your Git companion.',
-    action: null
+    action: null,
+    isMinimized: false
   });
   const [showBubble, setShowBubble] = useState(true);
+  const [isMinimized, setIsMinimized] = useState(false);
 
   useEffect(() => {
+    // Ensure frameless window has clean transparent background
+    document.documentElement.style.background = 'transparent';
+    document.body.style.background = 'transparent';
+    const root = document.getElementById('root');
+    if (root) root.style.background = 'transparent';
+
     // Initial state fetch
     if (window.pullmateApi?.character?.getState) {
       window.pullmateApi.character.getState().then((st) => {
-        if (st) setPipState(st);
+        if (st) {
+          setPipState(st);
+          if (typeof st.isMinimized === 'boolean') {
+            setIsMinimized(st.isMinimized);
+          }
+        }
       });
     }
 
@@ -22,7 +35,16 @@ export default function FloatingCharacter() {
     if (window.pullmateApi?.character?.onStateChanged) {
       const unsubscribe = window.pullmateApi.character.onStateChanged((newState) => {
         setPipState(newState);
-        setShowBubble(true);
+        if (typeof newState.isMinimized === 'boolean') {
+          setIsMinimized(newState.isMinimized);
+        }
+        // When a new update comes, automatically open/restore Pip!
+        if (newState.state === 'updates_available') {
+          setIsMinimized(false);
+          setShowBubble(true);
+        } else {
+          setShowBubble(true);
+        }
       });
       return () => unsubscribe();
     }
@@ -30,6 +52,21 @@ export default function FloatingCharacter() {
 
   const handleHideCharacter = () => {
     window.pullmateApi?.character?.hide();
+  };
+
+  const handleMinimize = async () => {
+    setIsMinimized(true);
+    if (window.pullmateApi?.character?.minimize) {
+      await window.pullmateApi.character.minimize();
+    }
+  };
+
+  const handleRestore = async () => {
+    setIsMinimized(false);
+    setShowBubble(true);
+    if (window.pullmateApi?.character?.restore) {
+      await window.pullmateApi.character.restore();
+    }
   };
 
   const handleOpenMainWindow = () => {
@@ -71,6 +108,116 @@ export default function FloatingCharacter() {
     }
   };
 
+  if (isMinimized) {
+    return (
+      <div className="pip-minimized-wrapper no-drag">
+        <button
+          type="button"
+          className={`pip-minimized-button state-${state}`}
+          onClick={handleRestore}
+          title={
+            state === 'updates_available'
+              ? 'Pip: New Git updates available! Click to open'
+              : 'Pip: Git Companion (Click to open)'
+          }
+        >
+          {/* Animated cute mini Pip face */}
+          <svg viewBox="28 8 84 84" width="40" height="40" className="pip-minimized-svg">
+            <defs>
+              <linearGradient id="pipMiniBodyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor="#FFFFFF" />
+                <stop offset="100%" stopColor="#CBD5E1" />
+              </linearGradient>
+              <linearGradient id="pipMiniVisorGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor="#1E293B" />
+                <stop offset="100%" stopColor="#0F172A" />
+              </linearGradient>
+            </defs>
+
+            {/* Antenna Stem */}
+            <line x1="70" y1="36" x2="70" y2="20" stroke="#94A3B8" strokeWidth="3" strokeLinecap="round" />
+            {/* Glowing Orb */}
+            <circle
+              cx="70"
+              cy="16"
+              r="7"
+              fill={getOrbColor()}
+              className="pip-antenna-orb"
+            />
+            <circle cx="68" cy="14" r="2" fill="#FFFFFF" opacity="0.8" />
+
+            {/* Torso Head */}
+            <rect
+              x="30"
+              y="32"
+              width="80"
+              height="80"
+              rx="38"
+              fill="url(#pipMiniBodyGrad)"
+              stroke="#94A3B8"
+              strokeWidth="2.5"
+            />
+
+            {/* Screen Visor */}
+            <rect
+              x="42"
+              y="48"
+              width="56"
+              height="40"
+              rx="16"
+              fill="url(#pipMiniVisorGrad)"
+              stroke="#334155"
+              strokeWidth="1.5"
+            />
+
+            {/* Eyes */}
+            {state === 'updates_available' ? (
+              <g className="pip-eyes-alert">
+                <circle cx="55" cy="68" r="5" fill="#FBBF24" />
+                <circle cx="85" cy="68" r="5" fill="#FBBF24" />
+                <circle cx="56" cy="66" r="1.5" fill="#FFFFFF" />
+                <circle cx="86" cy="66" r="1.5" fill="#FFFFFF" />
+              </g>
+            ) : state === 'up_to_date' || state === 'celebrating' ? (
+              <g className="pip-eyes-happy" stroke="#34D399" strokeWidth="2.5" strokeLinecap="round" fill="none">
+                <path d="M 50 70 Q 55 64 60 70" />
+                <path d="M 80 70 Q 85 64 90 70" />
+              </g>
+            ) : state === 'error' ? (
+              <g className="pip-eyes-error" stroke="#F87171" strokeWidth="2" strokeLinecap="round">
+                <line x1="51" y1="64" x2="59" y2="72" />
+                <line x1="59" y1="64" x2="51" y2="72" />
+                <line x1="81" y1="64" x2="89" y2="72" />
+                <line x1="89" y1="64" x2="81" y2="72" />
+              </g>
+            ) : (
+              <g className="pip-eyes-normal">
+                <circle cx="55" cy="68" r="4.5" fill="#2DD4BF" />
+                <circle cx="85" cy="68" r="4.5" fill="#2DD4BF" />
+                <circle cx="56.5" cy="66.5" r="1.5" fill="#FFFFFF" />
+                <circle cx="86.5" cy="66.5" r="1.5" fill="#FFFFFF" />
+              </g>
+            )}
+
+            {/* Mouth */}
+            {state === 'updates_available' ? (
+              <circle cx="70" cy="80" r="2" fill="#FBBF24" />
+            ) : state === 'up_to_date' ? (
+              <path d="M 64 78 Q 70 84 76 78" stroke="#34D399" strokeWidth="2" strokeLinecap="round" fill="none" />
+            ) : (
+              <path d="M 66 79 Q 70 82 74 79" stroke="#2DD4BF" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+            )}
+          </svg>
+
+          {/* Badge indicator for updates if available */}
+          {state === 'updates_available' && (
+            <span className="pip-minimized-pulse-badge" />
+          )}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="floating-companion-wrapper">
       {/* Speech Bubble */}
@@ -80,6 +227,7 @@ export default function FloatingCharacter() {
           action={pipState.action}
           onClose={() => setShowBubble(false)}
           onHideCharacter={handleHideCharacter}
+          onMinimize={handleMinimize}
           onOpenMainWindow={handleOpenMainWindow}
         />
       )}
@@ -259,6 +407,13 @@ export default function FloatingCharacter() {
 
         {/* Quick Toolbar on Hover */}
         <div className="pip-hover-tools no-drag">
+          <button
+            className="tool-btn"
+            title="Minimize Pip to Bottom Left"
+            onClick={handleMinimize}
+          >
+            <Minus size={12} />
+          </button>
           <button
             className="tool-btn"
             title="Check All Repositories Now"

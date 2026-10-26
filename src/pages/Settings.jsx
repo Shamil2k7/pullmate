@@ -58,6 +58,16 @@ export default function Settings({ settings, onUpdateSettings, onResetSettings }
     alert('Pip desktop position has been reset to default.');
   };
 
+  const handleSendTestNotification = async () => {
+    try {
+      if (window.pullmateApi?.system?.testNotification) {
+        await window.pullmateApi.system.testNotification();
+      }
+    } catch (err) {
+      console.error('Failed to trigger test notification:', err);
+    }
+  };
+
   const isSnoozed = settings.snoozeUntil && Date.now() < Date.parse(settings.snoozeUntil);
 
   return (
@@ -159,6 +169,25 @@ export default function Settings({ settings, onUpdateSettings, onResetSettings }
 
             <div className="preference-item">
               <div className="preference-info">
+                <span className="pref-title">Minimize Pip to Bottom Left</span>
+                <p className="pref-desc">
+                  Dock Pip as a compact round button in the bottom-left screen. Pip automatically expands whenever new Git updates arrive.
+                </p>
+              </div>
+              <div className="preference-control">
+                <label className="switch">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(settings.characterMinimized)}
+                    onChange={() => onUpdateSettings({ characterMinimized: !settings.characterMinimized })}
+                  />
+                  <span className="slider round" />
+                </label>
+              </div>
+            </div>
+
+            <div className="preference-item">
+              <div className="preference-info">
                 <span className="pref-title">Minimize to Tray</span>
                 <p className="pref-desc">
                   Closing the main window will minimize PullMate to the system tray instead of exiting.
@@ -232,10 +261,20 @@ export default function Settings({ settings, onUpdateSettings, onResetSettings }
 
         {/* General Synchronization Preferences */}
         <div className="settings-section-card">
-          <h3 className="section-title">
-            <Bell size={18} />
-            <span>Sync & Notifications</span>
-          </h3>
+          <div className="section-header-row-with-action">
+            <h3 className="section-title">
+              <Bell size={18} />
+              <span>Sync & Real-Time Notifications</span>
+            </h3>
+            <button
+              className="btn-secondary-action"
+              onClick={handleSendTestNotification}
+              title="Test Windows native notification and in-app alerts"
+            >
+              <Bell size={13} />
+              <span>Send Test Notification</span>
+            </button>
+          </div>
           <ReminderSettings
             settings={settings}
             onUpdateSettings={onUpdateSettings}

@@ -1,11 +1,14 @@
 const { execFile, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { AsyncLocalStorage } = require('async_hooks');
 
 class GitService {
   constructor() {
     // Map of active path -> Promise, to prevent overlapping Git operations on the same repo
     this.locks = new Map();
+    // AsyncLocalStorage to provide re-entrant locking for nested Git operations
+    this.asyncLocalStorage = new AsyncLocalStorage();
   }
 
   /**
@@ -41,12 +44,21 @@ class GitService {
   }
 
   /**
-   * Run operation with exclusive lock per repo path
+   * Run operation with exclusive lock per repo path.
+   * Supports re-entrancy so nested GitService calls on the same repo do not deadlock.
    * @param {string} repoPath 
    * @param {Function} task 
    */
   async withLock(repoPath, task) {
     const key = path.normalize(repoPath).toLowerCase();
+    const activeLocks = this.asyncLocalStorage.getStore();
+
+    // Re-entrancy: If the current asynchronous call chain already holds the lock on this repo, proceed immediately
+    if (activeLocks && activeLocks.has(key)) {
+      return await task();
+    }
+
+    // Wait for any previous concurrent task on this repo to finish
     while (this.locks.has(key)) {
       try {
         await this.locks.get(key);
@@ -59,12 +71,17 @@ class GitService {
     const lockPromise = new Promise(res => { promiseResolve = res; });
     this.locks.set(key, lockPromise);
 
-    try {
-      return await task();
-    } finally {
-      this.locks.delete(key);
-      promiseResolve();
-    }
+    const newLocks = new Set(activeLocks || []);
+    newLocks.add(key);
+
+    return this.asyncLocalStorage.run(newLocks, async () => {
+      try {
+        return await task();
+      } finally {
+        this.locks.delete(key);
+        promiseResolve();
+      }
+    });
   }
 
   /**
@@ -394,52 +411,123 @@ class GitService {
    */
   async safePull(repoPath) {
     return this.withLock(repoPath, async () => {
-      // 1. Verify working tree
+      // 1. Verify working tree cleanliness
       const tree = await this.checkWorkingTree(repoPath);
       if (!tree.isClean) {
         throw new Error(`Cannot pull: You have uncommitted changes (${tree.statusSummary}). Please commit or stash your changes first.`);
       }
 
-      // 2. Refresh remote
+      // 2. Refresh remote references
       try {
         await this._runGit(['fetch', '--prune'], repoPath, 35000);
       } catch (err) {
-        throw new Error(`Cannot pull: Remote fetch failed: ${err.stderr || err.message}`);
+        let msg = err.stderr || err.message;
+        if (msg.includes('Could not resolve host') || msg.includes('Failed to connect')) {
+          msg = 'Network connection failed. Unable to reach remote server.';
+        } else if (msg.includes('Authentication failed') || msg.includes('Permission denied')) {
+          msg = 'Authentication failed. Please check your Git credentials.';
+        }
+        throw new Error(`Cannot pull: Remote fetch failed: ${msg}`);
       }
+
+      // Determine current branch
+      let currentBranch = '';
+      try {
+        const { stdout: branch } = await this._runGit(['branch', '--show-current'], repoPath);
+        currentBranch = branch.trim();
+      } catch {
+        try {
+          const { stdout: headRef } = await this._runGit(['rev-parse', '--abbrev-ref', 'HEAD'], repoPath);
+          currentBranch = headRef.trim();
+        } catch {
+          currentBranch = 'HEAD';
+        }
+      }
+
+      // Check configured upstream branch
+      let trackingBranch = '';
+      try {
+        const { stdout: upstream } = await this._runGit(['rev-parse', '--abbrev-ref', '@{upstream}'], repoPath);
+        trackingBranch = upstream.trim();
+      } catch {
+        trackingBranch = '';
+      }
+
+      // If no upstream is explicitly set, check if origin/<currentBranch> exists on remote
+      if (!trackingBranch && currentBranch && currentBranch !== 'HEAD') {
+        try {
+          const { stdout: remoteRef } = await this._runGit(['rev-parse', '--verify', `origin/${currentBranch}`], repoPath);
+          if (remoteRef) {
+            trackingBranch = `origin/${currentBranch}`;
+            try {
+              await this._runGit(['branch', '--set-upstream-to', `origin/${currentBranch}`, currentBranch], repoPath);
+            } catch {
+              // Non-fatal if setting upstream config fails
+            }
+          }
+        } catch {
+          trackingBranch = '';
+        }
+      }
+
+      const targetRef = trackingBranch || '@{upstream}';
 
       // 3. Check divergence
       try {
-        const { stdout: counts } = await this._runGit(['rev-list', '--left-right', '--count', 'HEAD...@{upstream}'], repoPath);
+        const { stdout: counts } = await this._runGit(['rev-list', '--left-right', '--count', `HEAD...${targetRef}`], repoPath);
         const parts = counts.split(/\s+/);
         const ahead = parseInt(parts[0], 10) || 0;
         const behind = parseInt(parts[1], 10) || 0;
 
         if (ahead > 0 && behind > 0) {
-          throw new Error(`Cannot fast-forward: Local and remote branches have diverged (${ahead} ahead, ${behind} behind). Manual resolution required.`);
+          throw new Error(`Cannot fast-forward: Local and remote branches have diverged (${ahead} ahead, ${behind} behind). Manual merge or rebase is required.`);
         }
 
         if (behind === 0) {
+          const upToDateStatus = await this.getStatus(repoPath, false);
           return {
             success: true,
             message: 'Already up to date.',
-            status: await this.getStatus(repoPath, false)
+            status: upToDateStatus
           };
         }
       } catch (err) {
-        throw new Error(`Cannot verify upstream state: ${err.message}`);
+        if (err.message.includes('Cannot fast-forward') || err.message.includes('Cannot pull')) {
+          throw err;
+        }
+        throw new Error(`Cannot verify upstream state: ${err.stderr || err.message}`);
       }
 
       // 4. Run fast-forward only pull
       try {
-        const { stdout } = await this._runGit(['pull', '--ff-only'], repoPath, 45000);
+        let pullOutput = '';
+        try {
+          const { stdout } = await this._runGit(['pull', '--ff-only'], repoPath, 45000);
+          pullOutput = stdout;
+        } catch (pullErr) {
+          // If pull without arguments failed because of tracking info, try pulling explicitly from origin
+          if (currentBranch && currentBranch !== 'HEAD' && (pullErr.stderr || pullErr.message).includes('tracking information')) {
+            const { stdout } = await this._runGit(['pull', '--ff-only', 'origin', currentBranch], repoPath, 45000);
+            pullOutput = stdout;
+          } else {
+            throw pullErr;
+          }
+        }
+
         const newStatus = await this.getStatus(repoPath, false);
         return {
           success: true,
-          message: stdout || 'Successfully pulled changes (fast-forward).',
+          message: pullOutput || 'Successfully pulled changes (fast-forward).',
           status: newStatus
         };
       } catch (err) {
-        throw new Error(`Git pull failed: ${err.stderr || err.message}`);
+        let cleanMsg = err.stderr || err.message;
+        if (cleanMsg.includes('Not possible to fast-forward')) {
+          cleanMsg = 'Cannot fast-forward: Remote history has diverged from your local commits. A merge or rebase is required.';
+        } else if (cleanMsg.includes('Please commit your changes or stash them before you merge')) {
+          cleanMsg = 'Cannot pull: Local uncommitted files would be overwritten by merge. Please commit or stash your changes first.';
+        }
+        throw new Error(`Git pull failed: ${cleanMsg}`);
       }
     });
   }

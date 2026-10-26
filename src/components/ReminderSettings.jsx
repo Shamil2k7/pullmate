@@ -119,17 +119,41 @@ export default function ReminderSettings({ settings, onUpdateSettings, isWizard 
           <div className="preference-control">
             <select
               className="select-input"
-              value={settings.checkIntervalMinutes || 1}
+              value={settings.checkIntervalMinutes || 0.5}
               onChange={(e) => handleChange('checkIntervalMinutes', Number(e.target.value))}
             >
-              <option value={1}>Every 1 minute (Instant Checks - Recommended)</option>
+              <option value={0.25}>Every 15 seconds (Ultra Real-Time)</option>
+              <option value={0.5}>Every 30 seconds (Real-Time - Recommended)</option>
+              <option value={1}>Every 1 minute (Fast Checks)</option>
               <option value={2}>Every 2 minutes</option>
               <option value={5}>Every 5 minutes</option>
               <option value={15}>Every 15 minutes</option>
               <option value={30}>Every 30 minutes</option>
               <option value={60}>Every 1 hour</option>
-              <option value={120}>Every 2 hours</option>
             </select>
+          </div>
+        </div>
+
+        {/* Focus Auto-Check Preference */}
+        <div className="preference-item">
+          <div className="preference-info">
+            <div className="preference-title-row">
+              <Monitor size={16} />
+              <span className="pref-title">Auto-Check on Window Focus</span>
+            </div>
+            <p className="pref-desc">
+              Instantly check remote repositories for new collaborator commits whenever you switch back to PullMate.
+            </p>
+          </div>
+          <div className="preference-control">
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={settings.autoCheckOnFocus !== false}
+                onChange={() => handleToggle('autoCheckOnFocus')}
+              />
+              <span className="slider round" />
+            </label>
           </div>
         </div>
 
