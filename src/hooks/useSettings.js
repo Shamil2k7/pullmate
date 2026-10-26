@@ -8,7 +8,7 @@ export function useSettings() {
     characterAlwaysOnTop: true,
     characterPosition: { x: null, y: null },
     notificationsEnabled: true,
-    checkIntervalMinutes: 30,
+    checkIntervalMinutes: 1,
     checkOnStartup: true,
     quietHoursEnabled: false,
     quietHoursStart: '22:00',

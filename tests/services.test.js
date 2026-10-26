@@ -87,7 +87,7 @@ describe('SettingsService Local Persistence', () => {
     const settings = settingsService.getSettings();
     expect(settings.onboardingCompleted).toBe(false);
     expect(settings.characterVisible).toBe(true);
-    expect(settings.checkIntervalMinutes).toBe(30);
+    expect(settings.checkIntervalMinutes).toBe(1);
   });
 
   it('persists and updates partial settings', () => {

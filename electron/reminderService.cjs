@@ -21,21 +21,19 @@ class ReminderService {
   start() {
     this.stop();
     const settings = this.settingsService.getSettings();
-    const intervalMinutes = Math.max(5, settings.checkIntervalMinutes || 30);
+    const intervalMinutes = Math.max(1, settings.checkIntervalMinutes !== undefined ? settings.checkIntervalMinutes : 1);
     const intervalMs = intervalMinutes * 60 * 1000;
 
-    console.log(`[ReminderService] Scheduler started. Checking every ${intervalMinutes} minutes.`);
+    console.log(`[ReminderService] Scheduler started. Checking every ${intervalMinutes} minute(s) (${intervalMs}ms).`);
 
     this.timer = setInterval(() => {
       this.checkAll({ isBackgroundScheduled: true });
     }, intervalMs);
 
-    // Initial check on startup if enabled and onboarding is complete
-    if (settings.onboardingCompleted && settings.checkOnStartup) {
-      setTimeout(() => {
-        this.checkAll({ isInitialCheck: true });
-      }, 3000);
-    }
+    // Initial background check shortly after startup
+    setTimeout(() => {
+      this.checkAll({ isInitialCheck: true });
+    }, 1500);
   }
 
   /**
@@ -276,7 +274,7 @@ class ReminderService {
       });
     }
 
-    // Windows Native Notification dispatch with deduplication
+    // Windows Native Notification dispatch
     if (!settings.notificationsEnabled || quiet || snoozed) {
       return;
     }
@@ -286,13 +284,16 @@ class ReminderService {
       const history = this.notificationHistory.get(repo.id);
       const now = Date.now();
 
-      // Suppress duplicate: only notify if commit count increased or > 2 hours passed
-      if (history) {
-        const countIncreased = status.behindCount > history.count;
-        const cooldownPassed = (now - history.timestamp) > 2 * 60 * 60 * 1000;
-        if (!countIncreased && !cooldownPassed) {
-          continue;
-        }
+      // Trigger notification if:
+      // 1. Repo is newly behind
+      // 2. OR incoming commit count has changed (someone pushed another commit)
+      // 3. OR 10 minutes have elapsed since the last alert
+      const shouldNotify = !history ||
+        (status.behindCount !== history.count) ||
+        ((now - history.timestamp) > 10 * 60 * 1000);
+
+      if (!shouldNotify) {
+        continue;
       }
 
       this.notificationHistory.set(repo.id, {
@@ -301,9 +302,18 @@ class ReminderService {
       });
 
       this._sendNativeNotification(
-        `PullMate: ${repo.name} Needs Sync`,
-        `Repository is ${status.behindCount} commit${status.behindCount > 1 ? 's' : ''} behind ${status.trackingBranch || 'remote'}.`
+        `PullMate: ${repo.name} Needs Sync (${status.behindCount} new commit${status.behindCount > 1 ? 's' : ''})`,
+        `Branch is ${status.behindCount} commit${status.behindCount > 1 ? 's' : ''} behind remote (${status.trackingBranch || 'origin'}). Fast-forward pull available.`
       );
+    }
+
+    // Reset notification history for repositories that are now up to date
+    // so any new remote commits trigger an immediate notification
+    const currentRepos = this.repositoryService.getRepositories();
+    for (const repo of currentRepos) {
+      if (!behindRepos.some(b => b.repo.id === repo.id)) {
+        this.notificationHistory.delete(repo.id);
+      }
     }
   }
 
@@ -313,7 +323,9 @@ class ReminderService {
         const notification = new Notification({
           title,
           body,
-          silent: false
+          silent: false,
+          urgency: 'critical',
+          timeoutType: 'default'
         });
 
         notification.on('click', () => {
@@ -321,6 +333,9 @@ class ReminderService {
         });
 
         notification.show();
+        console.log(`[ReminderService] Native toast notification shown: "${title}"`);
+      } else {
+        console.warn('[ReminderService] Native Notification API is not supported on this host.');
       }
     } catch (err) {
       console.warn('[ReminderService] Native notification failed:', err.message);

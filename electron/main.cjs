@@ -9,6 +9,15 @@ const StartupService = require('./startupService.cjs');
 const ReminderService = require('./reminderService.cjs');
 const TrayService = require('./trayService.cjs');
 
+// Set App User Model ID on Windows so Action Center / Toast notifications work
+if (process.platform === 'win32') {
+  try {
+    app.setAppUserModelId(app.isPackaged ? 'com.pullmate.app' : process.execPath);
+  } catch (err) {
+    console.warn('[Main] setAppUserModelId failed:', err.message);
+  }
+}
+
 // Single instance lock
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -395,6 +404,16 @@ ipcMain.handle('repos:add', (_event, repoData) => {
   }
   const added = repositoryService.addRepository(repoData);
   broadcastRepositoriesUpdated();
+
+  // Immediately check newly added repository
+  if (reminderService) {
+    setTimeout(() => {
+      reminderService.checkRepository(added.id).catch(err => {
+        console.warn('[Main] Immediate check for added repo failed:', err.message);
+      });
+    }, 500);
+  }
+
   return added;
 });
 
@@ -511,8 +530,8 @@ ipcMain.handle('settings:update', (_event, partial) => {
     characterWindow.setAlwaysOnTop(Boolean(partial.characterAlwaysOnTop));
   }
 
-  // If check interval changed, restart reminder service
-  if (partial.checkIntervalMinutes !== undefined) {
+  // If check interval or onboarding completion changed, restart reminder service
+  if (partial.checkIntervalMinutes !== undefined || partial.onboardingCompleted !== undefined) {
     reminderService.restart();
   }
 

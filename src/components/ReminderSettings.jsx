@@ -119,11 +119,14 @@ export default function ReminderSettings({ settings, onUpdateSettings, isWizard 
           <div className="preference-control">
             <select
               className="select-input"
-              value={settings.checkIntervalMinutes || 30}
+              value={settings.checkIntervalMinutes || 1}
               onChange={(e) => handleChange('checkIntervalMinutes', Number(e.target.value))}
             >
+              <option value={1}>Every 1 minute (Instant Checks - Recommended)</option>
+              <option value={2}>Every 2 minutes</option>
+              <option value={5}>Every 5 minutes</option>
               <option value={15}>Every 15 minutes</option>
-              <option value={30}>Every 30 minutes (Recommended)</option>
+              <option value={30}>Every 30 minutes</option>
               <option value={60}>Every 1 hour</option>
               <option value={120}>Every 2 hours</option>
             </select>

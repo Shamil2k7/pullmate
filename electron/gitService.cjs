@@ -23,9 +23,8 @@ class GitService {
         maxBuffer: 10 * 1024 * 1024,
         env: {
           ...process.env,
-          // Avoid interactive credential prompts freezing the process
-          GIT_TERMINAL_PROMPT: '0',
-          GIT_ASKPASS: ''
+          // Avoid interactive terminal prompts freezing the background daemon
+          GIT_TERMINAL_PROMPT: '0'
         }
       }, (error, stdout, stderr) => {
         if (error) {
@@ -304,6 +303,19 @@ class GitService {
         hasUpstream = false;
       }
 
+      // If no upstream is explicitly set, check if origin/{branch} exists on remote
+      if (!hasUpstream && currentBranch) {
+        try {
+          const { stdout: remoteRef } = await this._runGit(['rev-parse', '--verify', `origin/${currentBranch}`], repoPath);
+          if (remoteRef) {
+            trackingBranch = `origin/${currentBranch}`;
+            hasUpstream = true;
+          }
+        } catch {
+          hasUpstream = false;
+        }
+      }
+
       if (!hasUpstream) {
         return {
           status: tree.isClean ? 'no_upstream' : 'uncommitted_changes',
@@ -321,7 +333,8 @@ class GitService {
       let aheadCount = 0;
       let behindCount = 0;
       try {
-        const { stdout: counts } = await this._runGit(['rev-list', '--left-right', '--count', 'HEAD...@{upstream}'], repoPath);
+        const targetRef = trackingBranch || '@{upstream}';
+        const { stdout: counts } = await this._runGit(['rev-list', '--left-right', '--count', `HEAD...${targetRef}`], repoPath);
         // stdout format: "<ahead>\t<behind>"
         const parts = counts.split(/\s+/);
         aheadCount = parseInt(parts[0], 10) || 0;
