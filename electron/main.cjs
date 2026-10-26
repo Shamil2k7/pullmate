@@ -409,8 +409,9 @@ ipcMain.handle('repos:validate-folder', async (_event, folderPath) => {
   return gitService.validateLocalFolder(folderPath);
 });
 
-ipcMain.handle('repos:select-directory', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
+ipcMain.handle('repos:select-directory', async (event) => {
+  const win = (event && event.sender && BrowserWindow.fromWebContents(event.sender)) || mainWindow;
+  const result = await dialog.showOpenDialog(win, {
     properties: ['openDirectory', 'createDirectory'],
     title: 'Select Repository Folder'
   });

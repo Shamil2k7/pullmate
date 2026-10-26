@@ -91,35 +91,43 @@ class GitService {
   /**
    * Validates if a directory exists and is a git repository
    * @param {string} folderPath 
-   * @returns {Promise<{isValid: boolean, isRepo: boolean, rootPath: string|null, error: string|null}>}
+   * @returns {Promise<{isValid: boolean, isRepo: boolean, rootPath: string|null, remoteUrl: string|null, remoteIdentity: object|null, error: string|null}>}
    */
   async validateLocalFolder(folderPath) {
     if (!folderPath || typeof folderPath !== 'string') {
-      return { isValid: false, isRepo: false, rootPath: null, error: 'Path is required' };
+      return { isValid: false, isRepo: false, rootPath: null, remoteUrl: null, remoteIdentity: null, error: 'Path is required' };
     }
 
-    const normalized = path.normalize(folderPath);
+    // Strip wrapping quotes (e.g. from Windows "Copy as path")
+    const clean = folderPath.replace(/^["']|["']$/g, '').trim();
+    const normalized = path.normalize(clean);
 
     if (!fs.existsSync(normalized)) {
-      return { isValid: false, isRepo: false, rootPath: null, error: 'Folder does not exist on disk' };
+      return { isValid: false, isRepo: false, rootPath: null, remoteUrl: null, remoteIdentity: null, error: 'Folder does not exist on disk' };
     }
 
     try {
       const stat = fs.statSync(normalized);
       if (!stat.isDirectory()) {
-        return { isValid: false, isRepo: false, rootPath: null, error: 'Path is not a directory' };
+        return { isValid: false, isRepo: false, rootPath: null, remoteUrl: null, remoteIdentity: null, error: 'Path is not a directory' };
       }
 
       const { stdout: isInside } = await this._runGit(['rev-parse', '--is-inside-work-tree'], normalized);
       if (isInside !== 'true') {
-        return { isValid: true, isRepo: false, rootPath: null, error: 'Not a Git repository' };
+        return { isValid: true, isRepo: false, rootPath: null, remoteUrl: null, remoteIdentity: null, error: 'Not a Git repository (.git not found)' };
       }
 
       const { stdout: topLevel } = await this._runGit(['rev-parse', '--show-toplevel'], normalized);
+      const rootPath = path.normalize(topLevel);
+      const remoteUrl = await this.getRemoteUrl(rootPath, 'origin');
+      const remoteIdentity = this.parseRemoteUrl(remoteUrl);
+
       return {
         isValid: true,
         isRepo: true,
-        rootPath: path.normalize(topLevel),
+        rootPath,
+        remoteUrl,
+        remoteIdentity,
         error: null
       };
     } catch (err) {
@@ -127,6 +135,8 @@ class GitService {
         isValid: true,
         isRepo: false,
         rootPath: null,
+        remoteUrl: null,
+        remoteIdentity: null,
         error: 'Not a Git repository or corrupted repository'
       };
     }
