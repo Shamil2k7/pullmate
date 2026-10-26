@@ -1460,22 +1460,23 @@ html, body, #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
+  cursor: grab;
   position: relative;
-  transition: all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
   outline: none;
   padding: 0;
   -webkit-app-region: no-drag;
 }
 
 .pip-minimized-button:hover {
-  transform: scale(1.1);
+  transform: scale(1.08);
   border-color: #60A5FA;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55), 0 0 20px rgba(96, 165, 250, 0.6);
 }
 
 .pip-minimized-button:active {
-  transform: scale(0.94);
+  cursor: grabbing;
+  transform: scale(0.96);
 }
 
 .pip-minimized-button.state-updates_available {

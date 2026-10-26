@@ -30,7 +30,7 @@ export default function CharacterBubble({ message, action, onClose, onHideCharac
           {onMinimize && (
             <button
               className="bubble-icon-btn"
-              title="Minimize Pip to Bottom Left"
+              title="Minimize Pip"
               onClick={onMinimize}
             >
               <Minus size={12} />
@@ -38,14 +38,14 @@ export default function CharacterBubble({ message, action, onClose, onHideCharac
           )}
           <button
             className="bubble-icon-btn"
-            title="Open PullMate Dashboard"
+            title="Open Dashboard"
             onClick={onOpenMainWindow}
           >
             <ExternalLink size={12} />
           </button>
           <button
             className="bubble-icon-btn"
-            title="Hide Pip from Desktop"
+            title="Hide Pip"
             onClick={onHideCharacter}
           >
             <EyeOff size={12} />

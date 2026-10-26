@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import CharacterBubble from './CharacterBubble';
 import { RefreshCw, Minus } from 'lucide-react';
 
@@ -12,7 +12,14 @@ export default function FloatingCharacter() {
   const [showBubble, setShowBubble] = useState(true);
   const [isMinimized, setIsMinimized] = useState(false);
 
+  const isDraggingMiniRef = useRef(false);
+  const dragStartRef = useRef({ x: 0, y: 0 });
+  const hasMovedRef = useRef(false);
+
   useEffect(() => {
+    // Blank out document title so no name tag displays for Pip window
+    document.title = '';
+
     // Ensure frameless window has clean transparent background
     document.documentElement.style.background = 'transparent';
     document.body.style.background = 'transparent';
@@ -69,6 +76,45 @@ export default function FloatingCharacter() {
     }
   };
 
+  const handleMiniMouseDown = (e) => {
+    if (e.button !== 0) return; // Only respond to left clicks
+    isDraggingMiniRef.current = true;
+    dragStartRef.current = { x: e.screenX, y: e.screenY };
+    hasMovedRef.current = false;
+
+    const handleMouseMove = (moveEvent) => {
+      if (!isDraggingMiniRef.current) return;
+      const dx = moveEvent.screenX - dragStartRef.current.x;
+      const dy = moveEvent.screenY - dragStartRef.current.y;
+
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        hasMovedRef.current = true;
+      }
+
+      if (hasMovedRef.current) {
+        window.pullmateApi?.character?.moveBy?.(dx, dy);
+        dragStartRef.current = { x: moveEvent.screenX, y: moveEvent.screenY };
+      }
+    };
+
+    const handleMouseUp = () => {
+      isDraggingMiniRef.current = false;
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+
+      if (!hasMovedRef.current) {
+        // Plain click without moving -> restore / open Pip!
+        handleRestore();
+      } else {
+        // Moved / dragged -> save new position
+        window.pullmateApi?.character?.saveCurrentMinimizedPosition?.();
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
+
   const handleOpenMainWindow = () => {
     window.pullmateApi?.character?.openMainWindow();
   };
@@ -114,12 +160,7 @@ export default function FloatingCharacter() {
         <button
           type="button"
           className={`pip-minimized-button state-${state}`}
-          onClick={handleRestore}
-          title={
-            state === 'updates_available'
-              ? 'Pip: New Git updates available! Click to open'
-              : 'Pip: Git Companion (Click to open)'
-          }
+          onMouseDown={handleMiniMouseDown}
         >
           {/* Animated cute mini Pip face */}
           <svg viewBox="28 8 84 84" width="40" height="40" className="pip-minimized-svg">
@@ -233,7 +274,7 @@ export default function FloatingCharacter() {
       )}
 
       {/* Pip Mascot SVG & Controls */}
-      <div className="pip-character-container drag-handle" title="Pip: Drag to move, double-click to open PullMate" onDoubleClick={handleOpenMainWindow}>
+      <div className="pip-character-container drag-handle" onDoubleClick={handleOpenMainWindow}>
         <div className={`pip-mascot-body state-${state}`}>
           {/* Confetti elements for celebrating state */}
           {state === 'celebrating' && (
@@ -409,7 +450,7 @@ export default function FloatingCharacter() {
         <div className="pip-hover-tools no-drag">
           <button
             className="tool-btn"
-            title="Minimize Pip to Bottom Left"
+            title="Minimize Pip"
             onClick={handleMinimize}
           >
             <Minus size={12} />

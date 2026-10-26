@@ -37,7 +37,7 @@ class TrayService {
 
     const icon = this._createDefaultIcon();
     this.tray = new Tray(icon);
-    this.tray.setToolTip('PullMate - Your Git Buddy');
+    this.tray.setToolTip('PullMate');
 
     this.tray.on('double-click', () => {
       this.onOpenDashboard();

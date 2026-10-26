@@ -9,6 +9,7 @@ const DEFAULT_SETTINGS = {
   characterAlwaysOnTop: true,
   characterMinimized: false,
   characterPosition: { x: null, y: null },
+  minimizedPosition: { x: null, y: null },
   notificationsEnabled: true,
   checkIntervalMinutes: 0.5, // 30 seconds default for real-time synchronization
   autoCheckOnFocus: true,    // automatically checks for remote updates when window gains focus

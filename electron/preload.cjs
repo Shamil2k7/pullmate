@@ -63,6 +63,8 @@ contextBridge.exposeInMainWorld('pullmateApi', {
   character: {
     getState: () => ipcRenderer.invoke('pip:get-state'),
     savePosition: (x, y) => ipcRenderer.invoke('pip:save-position', { x, y }),
+    moveBy: (dx, dy) => ipcRenderer.send('pip:move-by', { dx, dy }),
+    saveCurrentMinimizedPosition: () => ipcRenderer.invoke('pip:save-minimized-position'),
     hide: () => ipcRenderer.invoke('pip:hide'),
     show: () => ipcRenderer.invoke('pip:show'),
     minimize: () => ipcRenderer.invoke('pip:minimize'),

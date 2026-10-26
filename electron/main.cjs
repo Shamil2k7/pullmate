@@ -35,6 +35,7 @@ let gitWatcher = null;
 let isQuitting = false;
 let isPipMinimized = false;
 let savedNormalCharacterPosition = null;
+let savedMinimizedPosition = null;
 
 // Current state for Pip character
 let currentPipState = {
@@ -190,8 +191,12 @@ function createCharacterWindow() {
 
   let x, y;
   if (isMini) {
-    x = workX + 24;
-    y = workY + screenHeight - miniSize - 24;
+    x = settings.minimizedPosition && typeof settings.minimizedPosition.x === 'number'
+      ? settings.minimizedPosition.x
+      : workX + 24;
+    y = settings.minimizedPosition && typeof settings.minimizedPosition.y === 'number'
+      ? settings.minimizedPosition.y
+      : workY + screenHeight - miniSize - 24;
   } else {
     x = settings.characterPosition && typeof settings.characterPosition.x === 'number'
       ? settings.characterPosition.x
@@ -207,6 +212,7 @@ function createCharacterWindow() {
   }
 
   characterWindow = new BrowserWindow({
+    title: '',
     width: winWidth,
     height: winHeight,
     x,
@@ -241,11 +247,19 @@ function createCharacterWindow() {
   });
 
   characterWindow.on('moved', () => {
-    if (!characterWindow || characterWindow.isDestroyed() || isPipMinimized) return;
+    if (!characterWindow || characterWindow.isDestroyed()) return;
     const [curX, curY] = characterWindow.getPosition();
-    settingsService.updateSettings({
-      characterPosition: { x: curX, y: curY }
-    });
+    if (isPipMinimized) {
+      savedMinimizedPosition = { x: curX, y: curY };
+      settingsService.updateSettings({
+        minimizedPosition: { x: curX, y: curY }
+      });
+    } else {
+      savedNormalCharacterPosition = { x: curX, y: curY };
+      settingsService.updateSettings({
+        characterPosition: { x: curX, y: curY }
+      });
+    }
   });
 
   characterWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -257,12 +271,13 @@ function minimizeCharacterWindow() {
   const [curX, curY] = characterWindow.getPosition();
   savedNormalCharacterPosition = { x: curX, y: curY };
 
+  const settings = settingsService.getSettings();
   const primaryDisplay = screen.getPrimaryDisplay();
   const { x: workX, y: workY, height: workHeight } = primaryDisplay.workArea;
 
   const miniSize = 72;
-  const miniX = workX + 24;
-  const miniY = workY + workHeight - miniSize - 24;
+  const miniX = savedMinimizedPosition?.x ?? settings.minimizedPosition?.x ?? (workX + 24);
+  const miniY = savedMinimizedPosition?.y ?? settings.minimizedPosition?.y ?? (workY + workHeight - miniSize - 24);
 
   isPipMinimized = true;
   settingsService.updateSettings({ characterMinimized: true });
@@ -734,6 +749,20 @@ ipcMain.handle('pip:toggle-minimize', () => {
 
 ipcMain.handle('pip:is-minimized', () => {
   return isPipMinimized;
+});
+
+ipcMain.on('pip:move-by', (_event, { dx, dy }) => {
+  if (!characterWindow || characterWindow.isDestroyed()) return;
+  const [curX, curY] = characterWindow.getPosition();
+  characterWindow.setPosition(curX + dx, curY + dy);
+});
+
+ipcMain.handle('pip:save-minimized-position', () => {
+  if (!characterWindow || characterWindow.isDestroyed()) return;
+  const [curX, curY] = characterWindow.getPosition();
+  savedMinimizedPosition = { x: curX, y: curY };
+  settingsService.updateSettings({ minimizedPosition: { x: curX, y: curY } });
+  return true;
 });
 
 ipcMain.handle('pip:save-position', (_event, { x, y }) => {
